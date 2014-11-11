@@ -88,11 +88,14 @@ namespace KolZchutLinksVerification
         private static void ProcessCommandLine(string[] args)
         {
             var inputFilename = args[0];
-            var errorsFilename = args[1];
 
-            string logFilename = "KolZchutLinksVerification.log";
-            if (args.Count() > 2)
-                logFilename = args[2];
+
+			var errorsFilename = System.IO.Path.GetFileNameWithoutExtension(inputFilename) + "_ERRORS" + System.IO.Path.GetExtension(inputFilename);
+			if (args.Count () > 1) {
+				errorsFilename = args [1];
+			}
+
+			string logFilename = args.Count() > 2 ? args[2] : System.IO.Path.GetFileNameWithoutExtension(inputFilename) + ".log";
 
             if (args.Count() > 3)
                 int.TryParse(args[3], out secondsBetweenChecks);
@@ -269,6 +272,25 @@ namespace KolZchutLinksVerification
 
             return pageURL;
         }
+
+
+		private static bool isRedirect(int statusCode) {
+			return (statusCode == 301 || statusCode == 302) ? true : false;
+		}
+
+
+		/*
+		 * @todo Make this actually check for valid cases of redirect (301/302):
+		 * Change of protocol (http<->https) with same url
+		 * Same URL but with/without "/" (kolz.org.il <-> kolz.org.il/ )
+		 * Any redirect from the root of a site to an internal page (kolz.org.il -> kolz.org.il/Pages/default.aspx)
+		 * Maybe: with/without subdomain "www" (ahva.org.il <-> www.ahva.org.il)
+		 */
+		private static bool isValidRedirect(string url, HttpWebResponse response)
+		{
+			return false;
+		}
+
 
         private static bool VerifyURL(string url, out string status)
         {
