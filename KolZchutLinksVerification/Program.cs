@@ -4,6 +4,9 @@ using System.Linq;
 using System.Text;
 using System.IO;
 using System.Net;
+using System.Net.Security;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Collections;
 using System.Configuration;
 
@@ -41,6 +44,29 @@ namespace KolZchutLinksVerification
         static void Main(string[] args)
         {
             ProcessCommandLine(args);
+
+			/* Bypass certificate validation altogether, because Mono has problems with
+			 * resolving intermediate CAs. 
+			 * While this is a security breach of a sort, it is acceptable in this program, for now 
+			 */
+			ServicePointManager.ServerCertificateValidationCallback += delegate(object sender, X509Certificate cert, X509Chain chain, SslPolicyErrors sslPolicyErrors) {
+				/*
+				if (sslPolicyErrors == SslPolicyErrors.RemoteCertificateChainErrors) {
+					foreach (X509ChainStatus status in chain.ChainStatus) {
+						if (status.Status != X509ChainStatusFlags.RevocationStatusUnknown) {
+							return false;
+						}
+					}
+					return true;
+				}
+
+				return false;
+				*/
+				return true;
+			};
+
+
+
 
             while (!inputFile.EndOfStream || attempts.Count > 0)
             {
