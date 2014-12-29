@@ -9,6 +9,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Collections;
 using System.Configuration;
+using System.Globalization;
 
 namespace KolZchutLinksVerification
 {
@@ -77,7 +78,7 @@ namespace KolZchutLinksVerification
 
                 if (line != null)
                 {
-                    if (String.IsNullOrWhiteSpace(line))
+					if ( line.IsNullOrWhiteSpace() )
                         continue;
 
                     string pageURL = GetPageURL(line);
@@ -126,7 +127,7 @@ namespace KolZchutLinksVerification
             if (args.Count() > 3)
                 int.TryParse(args[3], out secondsBetweenChecks);
 
-            inputFile = new StreamReader(inputFilename, System.Text.Encoding.Default, true);
+            inputFile = new StreamReader(inputFilename, System.Text.Encoding.UTF8, true);
             errosFile = new StreamWriter(errorsFilename, false, inputFile.CurrentEncoding, 1);
 
             if (logFilename != null)
@@ -293,7 +294,7 @@ namespace KolZchutLinksVerification
                 }
             }
 
-            if (String.IsNullOrWhiteSpace(pageURL) && !skipVerification)
+			if ( pageURL.IsNullOrWhiteSpace() && !skipVerification )
                 throw (new Exception());
 
             return pageURL;
@@ -323,6 +324,8 @@ namespace KolZchutLinksVerification
             status = String.Empty;
             try
             {
+				url = TranslateIdnUrl(url);
+
                 HttpWebRequest request = HttpWebRequest.Create(url) as HttpWebRequest;
                 request.CookieContainer = new CookieContainer(300, 100, 64000);
                 request.Timeout = 60000; //set the timeout to 5 seconds to keep the user from waiting too long for the page to load
@@ -379,6 +382,17 @@ namespace KolZchutLinksVerification
             return false;
         }
 
+		// translateb IDN (e.g. hewbrew) URL to ascii
+		private static string TranslateIdnUrl(string url)
+		{
+			var uri = new Uri(url);
+			
+			IdnMapping idn = new IdnMapping();
+			var asciiHost = idn.GetAscii(uri.Host);
+
+			return url.Replace(uri.Host, asciiHost);
+		}
+
         // Logging
         private static string CountDesignation(int count)
         {
@@ -406,7 +420,12 @@ namespace KolZchutLinksVerification
             }
         }
 
-        private static void WriteErrorToConsole(string error, Exception ex = null)
+        private static void WriteErrorToConsole(string error)
+		{
+			WriteErrorToConsole(error, null);
+		}
+
+        private static void WriteErrorToConsole(string error, Exception ex)
         {
             var color = Console.ForegroundColor;
             Console.ForegroundColor = ConsoleColor.Red;
