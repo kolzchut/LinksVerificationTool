@@ -66,9 +66,6 @@ namespace KolZchutLinksVerification
 				return true;
 			};
 
-
-
-
             while (!inputFile.EndOfStream || attempts.Count > 0)
             {
                 string line = null;
@@ -89,7 +86,8 @@ namespace KolZchutLinksVerification
                     LogAttempt(line, pageURL);
 
                     string status;
-                    bool succeed = VerifyURLIfNeeded(ref shouldWait, pageURL, out status);
+                    bool shouldRetry;
+                    bool succeed = VerifyURLIfNeeded(ref shouldWait, pageURL, out status, out shouldRetry);
 
                     if (succeed)
                     {
@@ -97,7 +95,7 @@ namespace KolZchutLinksVerification
                     }
                     else
                     {
-                        ProcessFailure(line, pageURL, status);
+                        ProcessFailure(line, pageURL, status, shouldRetry);
                     }
                 }
 
@@ -115,8 +113,7 @@ namespace KolZchutLinksVerification
         private static void ProcessCommandLine(string[] args)
         {
             var inputFilename = args[0];
-
-
+            
 			var errorsFilename = System.IO.Path.GetFileNameWithoutExtension(inputFilename) + "_ERRORS" + System.IO.Path.GetExtension(inputFilename);
 			if (args.Count () > 1) {
 				errorsFilename = args [1];
@@ -181,8 +178,9 @@ namespace KolZchutLinksVerification
                 WriteToConsole(pageURL);
         }
 
-        private static bool VerifyURLIfNeeded(ref bool shouldWait, string pageURL, out string status)
+        private static bool VerifyURLIfNeeded(ref bool shouldWait, string pageURL, out string status, out bool shouldRetry)
         {
+            shouldRetry = true;
             bool succeed;
             Result result;
             if (processedURLs.TryGetValue(pageURL, out result))
@@ -199,7 +197,7 @@ namespace KolZchutLinksVerification
             }
             else
             {
-                succeed = VerifyURL(pageURL, out status);
+                succeed = VerifyURL(pageURL, out status, ref shouldRetry);
                 if (succeed)
                     WriteSuccessToConsole("Success");
             }
@@ -214,13 +212,18 @@ namespace KolZchutLinksVerification
             processedURLs[pageURL] = new Result() { Suceeded = true }; ; // true means it was processed and identified as a valid URL
         }
 
-        private static void ProcessFailure(string line, string pageURL, string status)
+        private static void ProcessFailure(string line, string pageURL, string status, bool shouldRetry)
         {
             if (processedURLs.ContainsKey(pageURL)) // failed duplicate, no need to run more attempts
             {
                 if (attempts.ContainsKey(line))
                     attempts.Remove(line);
 
+                WriteErrorLineToOutputFile(line, status);
+            }
+            else if (!shouldRetry)
+            {
+                processedURLs[pageURL] = new Result() { Suceeded = false, Status = status }; // false means it was processed and identified as a invalid URL
                 WriteErrorLineToOutputFile(line, status);
             }
             else if (!attempts.ContainsKey(line)) // This was the first attempt
@@ -300,26 +303,7 @@ namespace KolZchutLinksVerification
             return pageURL;
         }
 
-
-		private static bool isRedirect(int statusCode) {
-			return (statusCode == 301 || statusCode == 302) ? true : false;
-		}
-
-
-		/*
-		 * @todo Make this actually check for valid cases of redirect (301/302):
-		 * Change of protocol (http<->https) with same url
-		 * Same URL but with/without "/" (kolz.org.il <-> kolz.org.il/ )
-		 * Any redirect from the root of a site to an internal page (kolz.org.il -> kolz.org.il/Pages/default.aspx)
-		 * Maybe: with/without subdomain "www" (ahva.org.il <-> www.ahva.org.il)
-		 */
-		private static bool isValidRedirect(string url, HttpWebResponse response)
-		{
-			return false;
-		}
-
-
-        private static bool VerifyURL(string url, out string status)
+        private static bool VerifyURL(string url, out string status, ref bool shouldRetry)
         {
             status = String.Empty;
             try
@@ -340,14 +324,17 @@ namespace KolZchutLinksVerification
 
                 using (var response = request.GetResponse() as HttpWebResponse)
                 {
-
                     status = String.Format("{0} ({1})", response.StatusCode.ToString(), (int)response.StatusCode);
                     int statusCode = (int)response.StatusCode;
                     if (statusCode >= 100 && statusCode < 300) //Good requests
                     {
                         return true;
                     }
-                    else 
+                    else if (IsRedirect(statusCode))
+                    {
+                        return VerifyRedirect(url, ref status, ref shouldRetry, response, statusCode);
+                    }
+                    else
                     {
                         WriteErrorToConsole(String.Format("Status [{0}] returned for url: {1}", statusCode, url));
                     }
@@ -380,6 +367,49 @@ namespace KolZchutLinksVerification
             }
 
             return false;
+        }
+
+        private static bool IsRedirect(int statusCode)
+        {
+            return (statusCode == 301 ||
+                    statusCode == 302 ||
+                    statusCode == 303 ||
+                    statusCode == 307 ||
+                    statusCode == 308) ? true : false;
+        }
+
+        private static bool VerifyRedirect(string url, ref string status, ref bool shouldRetry, HttpWebResponse response, int statusCode)
+        {
+            var redirectURL = response.GetResponseHeader("Location");
+
+            Uri redirectUri;
+            if (!Uri.IsWellFormedUriString(redirectURL, UriKind.Absolute))
+            {
+                redirectUri = new Uri(new Uri(url), redirectURL);
+            }
+            else
+            {
+                redirectUri = new Uri(redirectURL);
+            }
+
+            var originalUri = new Uri(url);
+
+            var strippedRedirectHost = redirectUri.Host.Replace("www.", "");
+            var strippedOriginalHost = originalUri.Host.Replace("www.", "");
+
+            if (strippedRedirectHost == strippedOriginalHost &&
+                redirectUri.LocalPath.StartsWith(originalUri.LocalPath))
+            {
+                return true;
+            }
+            else
+            {
+                status = String.Format("Bad Redirect to {0} (Status {1})", redirectURL, statusCode);
+                WriteErrorToConsole(String.Format("{0} returned for url: {1}", status, url));
+                shouldRetry = false;
+
+                return false;
+            }
         }
 
 		// translateb IDN (e.g. hewbrew) URL to ascii
