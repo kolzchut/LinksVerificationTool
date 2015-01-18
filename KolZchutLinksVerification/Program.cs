@@ -35,15 +35,18 @@ namespace KolZchutLinksVerification
 
         static Dictionary<String, Result> processedURLs = new Dictionary<string, Result>();
         static Dictionary<String, Attempt> attempts = new Dictionary<string, Attempt>();
+        static Dictionary<String, DateTime> lastRequestToHost = new Dictionary<String, DateTime>();
         static StreamReader inputFile = null;
         static StreamWriter errosFile = null;
         static StreamWriter logFile = null;
-        static int secondsBetweenChecks = 10;
-
-        const char SeperatorCharacter = ',';
+        static int secondsBetweenChecksPerHost;
+        static char seperatorCharacter;
 
         static void Main(string[] args)
         {
+            secondsBetweenChecksPerHost = (int.TryParse(ConfigurationManager.AppSettings["SecondsBetweenChecksPerHost"], out secondsBetweenChecksPerHost) ? secondsBetweenChecksPerHost : 10);
+            seperatorCharacter = (char.TryParse(ConfigurationManager.AppSettings["SeperatorCharacter"], out seperatorCharacter) ? seperatorCharacter : ',');
+
             ProcessCommandLine(args);
 
 			/* Bypass certificate validation altogether, because Mono has problems with
@@ -68,10 +71,7 @@ namespace KolZchutLinksVerification
 
             while (!inputFile.EndOfStream || attempts.Count > 0)
             {
-                string line = null;
-                bool shouldWait = true;
-
-                line = GetNextLine();
+                string line = GetNextLine();
 
                 if (line != null)
                 {
@@ -87,22 +87,23 @@ namespace KolZchutLinksVerification
 
                     string status;
                     bool shouldRetry;
-                    bool succeed = VerifyURLIfNeeded(ref shouldWait, pageURL, out status, out shouldRetry);
+                    bool testDelayed = false;
+                    bool succeed = VerifyURLIfNeeded(pageURL, line, out status, out shouldRetry, ref testDelayed);
 
-                    if (succeed)
+                    if (!testDelayed)
                     {
-                        ProcessSuccess(line, pageURL);
-                    }
-                    else
-                    {
-                        ProcessFailure(line, pageURL, status, shouldRetry);
+                        if (succeed)
+                        {
+                            ProcessSuccess(line, pageURL);
+                        }
+                        else
+                        {
+                            ProcessFailure(line, pageURL, status, shouldRetry);
+                        }
                     }
                 }
 
                 errosFile.Flush();
-
-                if (shouldWait)
-                    System.Threading.Thread.Sleep(secondsBetweenChecks * 1000);
             }
 
             inputFile.Close();
@@ -120,9 +121,6 @@ namespace KolZchutLinksVerification
 			}
 
 			string logFilename = args.Count() > 2 ? args[2] : System.IO.Path.GetFileNameWithoutExtension(inputFilename) + ".log";
-
-            if (args.Count() > 3)
-                int.TryParse(args[3], out secondsBetweenChecks);
 
             inputFile = new StreamReader(inputFilename, System.Text.Encoding.UTF8, true);
             errosFile = new StreamWriter(errorsFilename, false, inputFile.CurrentEncoding, 1);
@@ -146,7 +144,7 @@ namespace KolZchutLinksVerification
 
             while (line == null && !inputFile.EndOfStream)
             {
-                line = inputFile.ReadLine().TrimEnd(new char[] { ' ', SeperatorCharacter });
+                line = inputFile.ReadLine().TrimEnd(new char[] { ' ', seperatorCharacter });
             }
             return line;
         }
@@ -169,7 +167,7 @@ namespace KolZchutLinksVerification
 
         private static void LogAttempt(string line, string pageURL)
         {
-            if (attempts.ContainsKey(line))
+            if (attempts.ContainsKey(line) && attempts[line].Count > 0)
             {
                 attempts[line].Count++;
                 WriteToConsole(String.Format("{0} attempt at: {1}", CountDesignation(attempts[line].Count), pageURL));
@@ -178,9 +176,10 @@ namespace KolZchutLinksVerification
                 WriteToConsole(pageURL);
         }
 
-        private static bool VerifyURLIfNeeded(ref bool shouldWait, string pageURL, out string status, out bool shouldRetry)
+        private static bool VerifyURLIfNeeded(string pageURL, string line, out string status, out bool shouldRetry, ref bool testDelayed)
         {
             shouldRetry = true;
+            status = "";
             bool succeed;
             Result result;
             if (processedURLs.TryGetValue(pageURL, out result))
@@ -192,14 +191,43 @@ namespace KolZchutLinksVerification
                     WriteSuccessToConsole("Success (duplicate)");
                 else
                     WriteErrorToConsole("Failed (duplicate)");
-
-                shouldWait = false;
             }
             else
             {
+                var host = new Uri(pageURL).Host;
+                if (lastRequestToHost.ContainsKey(host) &&
+                    (DateTime.Now - lastRequestToHost[host]).TotalSeconds < secondsBetweenChecksPerHost)
+                {
+                    int delayInSeconds = secondsBetweenChecksPerHost - (DateTime.Now - lastRequestToHost[host]).Seconds;
+                    if (attempts.ContainsKey(line))
+                    {
+                        attempts[line].Schedule = DateTime.Now + new TimeSpan(0, 0, delayInSeconds);
+                    }
+                    else
+                    {
+                        attempts.Add(line, new Attempt()
+                        {
+                            Count = 0,
+                            Schedule = DateTime.Now + new TimeSpan(0, 0, delayInSeconds)
+                        });
+                    }
+
+                    WriteErrorToConsole(String.Format("Consecutive access to host - delay test for {0} seconds", delayInSeconds));
+                    testDelayed = true;
+                    return false;
+                }
+
                 succeed = VerifyURL(pageURL, out status, ref shouldRetry);
                 if (succeed)
-                    WriteSuccessToConsole("Success");
+                {
+                    int attempt = 1;
+                    if (attempts.ContainsKey(line))
+                    {
+                        attempt = attempts[line].Count;
+                    }
+
+                    WriteSuccessToConsole(String.Format("Success ({0} attempt)", CountDesignation(attempt)));
+                }
             }
             return succeed;
         }
@@ -223,6 +251,9 @@ namespace KolZchutLinksVerification
             }
             else if (!shouldRetry)
             {
+                if (attempts.ContainsKey(line))
+                    attempts.Remove(line);
+
                 processedURLs[pageURL] = new Result() { Suceeded = false, Status = status }; // false means it was processed and identified as a invalid URL
                 WriteErrorLineToOutputFile(line, status);
             }
@@ -262,7 +293,7 @@ namespace KolZchutLinksVerification
 
         private static void WriteErrorLineToOutputFile(string line, string status)
         {
-            line += String.Format("{0}{1}", SeperatorCharacter, status);
+            line += String.Format("{0}{1}", seperatorCharacter, status);
             errosFile.WriteLine(line);
         }
 
@@ -272,14 +303,14 @@ namespace KolZchutLinksVerification
 
             bool skipVerification = false;
 
-            var columns = line.Split(new char[] { SeperatorCharacter });
+            var columns = line.Split(new char[] { seperatorCharacter });
 
             for (int i = 0; i < columns.Length; i++)
             {
                 var text = columns[i];
 
                 while (text.StartsWith("\"") && !text.EndsWith("\""))
-                    text += SeperatorCharacter + columns[++i];
+                    text += seperatorCharacter + columns[++i];
 
                 text = text.Trim(new char[] { '\"' });
 
@@ -321,6 +352,8 @@ namespace KolZchutLinksVerification
                 request.Accept = "*/*";
                 //request.UserAgent = "KolZchutLinksVerification";
                 request.UserAgent = @"Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 6.1; WOW64; Trident/6.0; SLCC2; .NET CLR 2.0.50727; .NET CLR 3.5.30729; .NET CLR 3.0.30729; Media Center PC 6.0; InfoPath.3; .NET4.0C; .NET4.0E)";
+
+                lastRequestToHost[request.RequestUri.Host] = DateTime.Now;
 
                 using (var response = request.GetResponse() as HttpWebResponse)
                 {
