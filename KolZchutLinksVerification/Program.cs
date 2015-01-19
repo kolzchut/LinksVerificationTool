@@ -461,6 +461,7 @@ namespace KolZchutLinksVerification
         {
             switch (count)
             {
+                case 0:
                 case 1:
                     return "First";
                 case 2:
