@@ -173,7 +173,7 @@ namespace KolZchutLinksVerification
                 WriteToConsole(String.Format("{0} attempt at: {1}", CountDesignation(attempts[line].Count), pageURL));
             }
             else
-                WriteToConsole(pageURL);
+                WriteToConsole(String.Format("Testing {0}", pageURL));
         }
 
         private static bool VerifyURLIfNeeded(string pageURL, string line, out string status, out bool shouldRetry, ref bool testDelayed)
@@ -217,7 +217,8 @@ namespace KolZchutLinksVerification
                     return false;
                 }
 
-                succeed = VerifyURL(pageURL, out status, ref shouldRetry);
+                int redirectCount = 0;
+                succeed = VerifyURL(pageURL, out status, ref shouldRetry, ref redirectCount);
                 if (succeed)
                 {
                     int attempt = 1;
@@ -334,9 +335,17 @@ namespace KolZchutLinksVerification
             return pageURL;
         }
 
-        private static bool VerifyURL(string url, out string status, ref bool shouldRetry)
+        private static bool VerifyURL(string url, out string status, ref bool shouldRetry, ref int redirectCount)
         {
             status = String.Empty;
+
+            int maxRedirects = int.TryParse(ConfigurationManager.AppSettings["maxRedirects"], out maxRedirects) ? maxRedirects : 10;
+            if (redirectCount == maxRedirects)
+            {
+                WriteErrorToConsole(String.Format("Too many redirects ({0}) for url: {1}", redirectCount, url));
+                return false;
+            }
+
             try
             {
 				url = TranslateIdnUrl(url);
@@ -344,10 +353,10 @@ namespace KolZchutLinksVerification
                 HttpWebRequest request = HttpWebRequest.Create(url) as HttpWebRequest;
                 request.CookieContainer = new CookieContainer(300, 100, 64000);
                 request.Timeout = 60000; //set the timeout to 5 seconds to keep the user from waiting too long for the page to load
-                request.MaximumAutomaticRedirections = 100;
                 request.MaximumResponseHeadersLength = 256000;
                 bool allowAutoredirect = false;
                 request.AllowAutoRedirect = (bool.TryParse(ConfigurationManager.AppSettings["AllowAutoRedirect"], out allowAutoredirect) ? allowAutoredirect : false);
+                request.MaximumAutomaticRedirections = maxRedirects;
                 request.Method = "GET"; //Get only the header information -- no need to download any content
                 request.Accept = "*/*";
                 //request.UserAgent = "KolZchutLinksVerification";
@@ -365,7 +374,8 @@ namespace KolZchutLinksVerification
                     }
                     else if (IsRedirect(statusCode))
                     {
-                        return VerifyRedirect(url, ref status, ref shouldRetry, response, statusCode);
+                        redirectCount++;
+                        return VerifyRedirect(url, ref status, ref shouldRetry, response, statusCode, ref redirectCount);
                     }
                     else
                     {
@@ -411,7 +421,7 @@ namespace KolZchutLinksVerification
                     statusCode == 308) ? true : false;
         }
 
-        private static bool VerifyRedirect(string url, ref string status, ref bool shouldRetry, HttpWebResponse response, int statusCode)
+        private static bool VerifyRedirect(string url, ref string status, ref bool shouldRetry, HttpWebResponse response, int statusCode, ref int redirectCount)
         {
             var redirectURL = response.GetResponseHeader("Location");
 
@@ -430,10 +440,16 @@ namespace KolZchutLinksVerification
             var strippedRedirectHost = redirectUri.Host.Replace("www.", "");
             var strippedOriginalHost = originalUri.Host.Replace("www.", "");
 
+            WriteToConsole(String.Format("[DEBUG] Testing redirect from {0} to {1} \r\n\tstripped hosts: {2} {3}\r\n\trelative: {4} {5}",
+                url, redirectUri.OriginalString, 
+                strippedOriginalHost, strippedRedirectHost,
+                originalUri.LocalPath, redirectUri.LocalPath));
+
             if (strippedRedirectHost == strippedOriginalHost &&
                 redirectUri.LocalPath.StartsWith(originalUri.LocalPath))
             {
-                return true;
+                WriteToConsole(String.Format("Testing {0} redirect to {1}", CountDesignation(redirectCount), redirectUri.OriginalString));
+                return VerifyURL(redirectUri.OriginalString, out status, ref shouldRetry, ref redirectCount);
             }
             else
             {
