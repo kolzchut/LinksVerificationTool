@@ -1,8 +1,10 @@
-SELECT page.page_namespace, page.page_title, externallinks.el_to FROM `externallinks` INNER JOIN page ON page.page_id = externallinks.el_from
-
+/*
+	Simple version
+	SELECT page.page_namespace, page.page_title, externallinks.el_to FROM `externallinks` INNER JOIN page ON page.page_id = externallinks.el_from
+ */
 
 -- Version that automatically adds the namespace to the title:
-SELECT 
+SELECT
 	CONCAT(
 		CASE page_namespace
 			-- MediaWiki standard (canonical) namespaces
@@ -26,7 +28,7 @@ SELECT
 			WHEN 118 THEN 'הקפאה:'
 			WHEN 120 THEN 'תרגול:'
 			WHEN 122 THEN 'נתון:'
-			
+
 			-- Default so we can see if the above isn't comprehensive enough:
 			ELSE CONCAT(page_namespace,':')
 		END,
@@ -34,4 +36,8 @@ SELECT
 	externallinks.el_to
 FROM `externallinks`
 INNER JOIN page ON page.page_id = externallinks.el_from
+WHERE el_to NOT LIKE 'mailto:%'
+AND el_to NOT LIKE 'tel:%'
+## Optional:
+# AND page_namespace NOT IN (/*NS_DRAFT*/116, /*NS_LIMBO*/118, /*NS_PRACTICE*/120)
 
